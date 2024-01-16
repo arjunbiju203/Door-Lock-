@@ -20,8 +20,8 @@ Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
 #include "addons/TokenHelper.h"
 #include "addons/RTDBHelper.h"
 
-#define WIFI_SSID "Arjun"
-#define WIFI_PASSWORD "asdfghjk"
+#define WIFI_SSID "PSIPL_2.4GHz"
+#define WIFI_PASSWORD "Pseals_12345"
 
 #define API_KEY "AIzaSyB5cXfwMZ4K2YQn3KRJ1w2G3IrjfswPh_Q"
 
@@ -45,15 +45,21 @@ uint8_t id;
 unsigned long delayDebounce = 300;  //millis
 unsigned long lastTimeButtonStateChange_login = millis();
 unsigned long lastTimeButtonStateChange_logout = millis();
-unsigned long regDelay = 2000;
+unsigned long regDelay = 5000;
 unsigned long logOnDelay = 500;
+// unsigned long lastTimeButtonStateChange_outswitch = millis();       //outswitch 
 
 int interval = 5000;
+
+#define override_pin D5    //Manual override
+#define SDA_PIN D3
+#define SCL_PIN D4
 
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 const int relaypin = D0;   //Relay INP Pin
 const int buttonPin = 10;  //outswitch pin
 int buttonState = 0;
+int buttonstate = 0;  //override
 
 struct Data {
   String date1;
@@ -68,20 +74,23 @@ int id_finger;
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);
+  Wire.begin(SDA_PIN, SCL_PIN); 
   lcd.init();  // or lcd.begin(); depending on your library version
   lcd.backlight();
+  lcd.begin(20, 4);
   lcd.print("System Starting");
   delay(1000);
-  lcdhomescreen();
   Serial.println("started");
   pinMode(relaypin, OUTPUT);
   pinMode(buttonPin, INPUT_PULLUP);
   digitalWrite(relaypin, LOW);
+  pinMode(override_pin, INPUT_PULLUP);
   button_init();
   finger_init();
   wifi_init();
   firebase_init();
   rtc_init();
+  lcdhomescreen();
 }
 
 // void rtc_init(){
@@ -152,7 +161,7 @@ void loop() {
 
   readFingerprint();
   outswitch();
-
+  override();
   if (millis() - lastTimeButtonStateChange_login >= delayDebounce) {
     byte button_login = digitalRead(login_pin);
     if (button_login != last_login) {  //
@@ -160,8 +169,9 @@ void loop() {
         //        Serial.println("bu");
         unsigned long nowTime_login = millis();
         unsigned long durationPressed_login = nowTime_login - lastTimeButtonStateChange_login;
-
-        if (durationPressed_login < regDelay && durationPressed_login >= logOnDelay) {
+        // unsigned long durationPressed_outswitch
+        if (durationPressed_login < regDelay && durationPressed_login >= logOnDelay) 
+        {
           Serial.println("LOGIN");
           lcd.clear();
           lcd.print("LOGIN");
@@ -202,10 +212,12 @@ void loop() {
               lcd.print("NAME : ");
               lcd.print(name_);
               lcd.setCursor(0, 2);
-              lcd.print("chipi chipi chapa chapa");
+              lcd.print("Good Morning ");
+              lcd.setCursor(0,3);
+              lcd.print("You have logged in!");
               delay(5000);
               lcdhomescreen();
-              set_entry(date_ + "/login/" + name_, time_);
+              set_entry(date_ + "/login/" + name_, time_,id_finger);
               break;
             } else if (result == FINGERPRINT_NOTFOUND) {
               lcd.clear();
@@ -245,7 +257,8 @@ void loop() {
           delay(1000);
           lcdhomescreen();
           loop();
-        } else if (durationPressed_login >= regDelay) {
+        } 
+        else if (durationPressed_login >= regDelay) {
           Serial.println("REG");
 
           Serial.println("Ready to enroll a fingerprint!");
@@ -333,11 +346,13 @@ void loop() {
               lcd.print("NAME : ");
               lcd.print(name_);
               lcd.setCursor(0, 2);
-              lcd.print("DWM bhara kyaa");
+              lcd.print("You have logged out");
+              lcd.setCursor(0, 3);
+              lcd.print("Have a nice day!");             
               //relayon();
               delay(5000);
               lcdhomescreen();
-              set_entry(date_ + "/logout/" + name_, time_);
+              set_entry(date_ + "/logout/" + name_, time_, id_finger);
               break;
             } else if (result == FINGERPRINT_NOTFOUND) {
               lcd.clear();
@@ -458,6 +473,10 @@ uint8_t getFingerprintID(int& id_finger) {
       return p;
     case FINGERPRINT_PACKETRECIEVEERR:
       Serial.println("Communication error");
+      lcd.clear();
+      lcd.print("Communication error");
+      delay(1000);
+      lcd.clear();
       return p;
     case FINGERPRINT_IMAGEFAIL:
       Serial.println("Imaging error");
@@ -589,6 +608,8 @@ uint8_t getFingerprintEnroll() {
   Serial.println(id);
   p = -1;
   Serial.println("Place same finger again");
+  lcd.clear();
+  lcd.print("Place same Finger again");
   while (p != FINGERPRINT_OK) {
     p = finger.getImage();
     switch (p) {
@@ -657,6 +678,8 @@ uint8_t getFingerprintEnroll() {
   p = finger.storeModel(id);
   if (p == FINGERPRINT_OK) {
     Serial.println("Stored!");
+    lcd.clear();
+    lcd.print("Fingerprint stored");
   } else if (p == FINGERPRINT_PACKETRECIEVEERR) {
     Serial.println("Communication error");
     return p;
@@ -712,8 +735,14 @@ void set_regid(String url, String data_string) {
   Firebase.RTDB.setString(&fbdo, url, data_string);
 }
 
-void set_entry(String url, String data_string) {
-  Firebase.RTDB.setString(&fbdo, url, data_string);
+// void set_entry(String url, String data_string) {
+//   Firebase.RTDB.setString(&fbdo, url, data_string);
+// }
+
+void set_entry(String url, String data_string, int id_finger)
+{
+  String full_url = url + ":" + String(id_finger);
+  Firebase.RTDB.setString(&fbdo, full_url, data_string);
 }
 
 void relayon() {
@@ -740,13 +769,29 @@ void outswitch() {
   if (buttonState == HIGH) {
     Serial.println("Button Pressed");
     digitalWrite(relaypin, HIGH);
-    while (digitalRead(buttonPin) == HIGH) {
-      delay(10);  // Small delay to prevent bouncing issues
-    }
+    // while (digitalRead(buttonPin) == HIGH) {
+    //   delay(10);  // Small delay to prevent bouncing issues
+    // }
+    delay(5000);
     Serial.println("Button Released");
     digitalWrite(relaypin, LOW);
   }
   delay(1000);
+}
+
+void override()
+{
+  buttonstate = digitalRead(override_pin);
+  if (buttonstate == LOW) 
+  {
+    Serial.println("Button Pressed");
+    digitalWrite(relaypin,HIGH);
+  }while (digitalRead(override_pin) == LOW) {
+    delay(10);  // Small delay to prevent bouncing issues
+    } 
+  Serial.println("Button Released");
+  digitalWrite(relaypin,LOW);
+  delay(100);
 }
 // void queue_test()
 // {
